@@ -1,0 +1,9 @@
+[22:00:52] [MAIN] Target: getscreen.exe
+[22:00:52] [MAIN] map_process_name() SUCCESS
+[22:00:52] [THREAD] Started
+[22:00:52] [DETECT] Task Manager PID: 19912
+[22:00:52] [+] Injected into Task Manager
+[22:01:20] [SCAN] Task Manager not running
+[22:01:21] [SCAN] Task Manager not running
+[22:01:22] [DETECT] Task Manager PID: 19504
+[22:01:22] [+] Injected into Task Manager
