@@ -517,9 +517,6 @@
 
 
 
-
-
-
 #include <Windows.h>
 #include <iostream>
 #include <fstream>
@@ -652,15 +649,33 @@ bool inject_dll(DWORD pid, const string& dll_path) {
     return (exitCode != 0);
 }
 
+DWORD FindTargetPid(const string& name) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+
+    PROCESSENTRY32 pe = { sizeof(pe) };
+    DWORD found = 0;
+
+    if (Process32First(snap, &pe)) {
+        do {
+            if (_stricmp(pe.szExeFile, name.c_str()) == 0) {
+                found = pe.th32ProcessID;
+                break;
+            }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
 DWORD WINAPI find_and_inject(LPVOID lpParam) {
     Log("[THREAD] Injection thread started");
 
     if (!enable_debug_privilege()) {
-        Log("[ERROR] Failed to enable debug privilege. Run as Administrator.");
+        Log("[ERROR] Admin privileges required.");
         return 1;
     }
 
-    // Resolve DLL path relative to EXE location
     char exePath[MAX_PATH];
     GetModuleFileNameA(NULL, exePath, MAX_PATH);
     string dllPath(exePath);
@@ -701,7 +716,11 @@ DWORD WINAPI find_and_inject(LPVOID lpParam) {
 
         CloseHandle(hSnap);
 
-        // Cleanup dead PIDs every ~30 seconds
+        DWORD targetPid = FindTargetPid(g_targetProcess);
+        if (targetPid != 0 && g_pBuf) {
+            memcpy((char*)g_pBuf + 132, &targetPid, sizeof(DWORD));
+        }
+
         static int cleanup = 0;
         if (++cleanup >= 30) {
             cleanup = 0;
@@ -722,7 +741,6 @@ DWORD WINAPI find_and_inject(LPVOID lpParam) {
 }
 
 bool setup_shared_memory(const string& targetName) {
-    // Create 256 bytes: [0-127] name, [128-131] injector PID
     g_hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, 256, "GetProcessName");
     if (!g_hMap) return false;
 
@@ -736,9 +754,12 @@ bool setup_shared_memory(const string& targetName) {
     memset(g_pBuf, 0, 256);
     CopyMemory(g_pBuf, targetName.c_str(), min(targetName.length(), (size_t)127));
 
-    // Write injector PID at offset 128
     DWORD* pidPtr = (DWORD*)((char*)g_pBuf + 128);
     *pidPtr = g_myPid;
+
+    DWORD targetPid = FindTargetPid(targetName);
+    DWORD* targetPidPtr = (DWORD*)((char*)g_pBuf + 132);
+    *targetPidPtr = targetPid;
 
     return true;
 }
@@ -746,7 +767,6 @@ bool setup_shared_memory(const string& targetName) {
 int main() {
     g_myPid = GetCurrentProcessId();
 
-    // Setup logging
     char exePath[MAX_PATH];
     GetModuleFileNameA(NULL, exePath, MAX_PATH);
     string basePath(exePath);
@@ -761,28 +781,25 @@ int main() {
     cout << endl;
 
     g_targetProcess = targetName;
-    Log("[MAIN] Target: " + targetName + " -> svchost.exe | Injector PID: " + to_string(g_myPid));
+    Log("[MAIN] Target: " + targetName + " -> svchost.exe | PID: " + to_string(g_myPid));
 
     if (!setup_shared_memory(targetName)) {
         Log("[MAIN] setup_shared_memory() FAILED");
         return 1;
     }
 
-    Log("[MAIN] Shared memory created successfully");
+    Log("[MAIN] Shared memory created");
 
-    // Hide console
     HWND hConsole = GetConsoleWindow();
     if (hConsole) ShowWindow(hConsole, SW_HIDE);
 
-    // Start injection thread
     HANDLE hThread = CreateThread(NULL, 0, find_and_inject, NULL, 0, NULL);
     if (!hThread) {
-        Log("[MAIN] Failed to create injection thread");
+        Log("[MAIN] Failed to create thread");
         return 1;
     }
     CloseHandle(hThread);
 
-    // Keep main thread alive
     while (true) Sleep(10000);
     return 0;
 }
